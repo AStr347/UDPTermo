@@ -1,10 +1,11 @@
-use std::net::{
-    UdpSocket,
-    SocketAddr
-};
-use std::sync::{Arc, Mutex};
-use std::{thread, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
+use tokio::{
+    self,
+    net::UdpSocket, time::sleep
+};
+
+use std::sync::{Arc, Mutex};
 use rand::Rng;
 
 #[derive(Clone, Copy)]
@@ -14,12 +15,12 @@ pub struct UdpTermo {
 }
 
 impl UdpTermo {
-    pub fn serv_runner(self, addr: &'static str){
-        let udp = UdpSocket::bind(addr).expect("can't bind soket");
-        self.run(udp);
+    pub async fn serv_runner(self, addr: &'static str){
+        let udp = UdpSocket::bind(addr).await.expect("can't bin soket addr");
+        self.run(udp).await;
     }
 
-    fn routine(termo : Arc<Mutex<UdpTermo>>, addr: SocketAddr, udp : Arc<UdpSocket>){
+    async fn routine(termo : Arc<Mutex<UdpTermo>>, addr: SocketAddr, udp : Arc<UdpSocket>){
         loop {
             let temp : f32;
             {
@@ -27,16 +28,16 @@ impl UdpTermo {
                 temp = t.temp;
             }
             let msg: &[u8] = &temp.to_be_bytes();
-            let res = udp.send_to(msg, addr);
+            let res = udp.send_to(msg, addr).await;
             match res {
                 Ok(_) => println!("{} sended to {}", temp, addr),
                 Err(e) => println!("{}", e),
             }
-            thread::sleep(Duration::from_secs(3));
+            sleep(Duration::from_secs(3)).await;
         }
     }
 
-    fn connected_routine(termo : Arc<Mutex<UdpTermo>>, udp : Arc<UdpSocket>){
+    async fn connected_routine(termo : Arc<Mutex<UdpTermo>>, udp : Arc<UdpSocket>){
         let id: u64;
         {
             let t = termo.lock().unwrap();
@@ -46,22 +47,22 @@ impl UdpTermo {
             let termo = termo.clone();
             let udp = udp.clone();
             let mut buf = [0; 8];
-            let res = udp.recv_from(&mut buf);
+            let res = udp.recv_from(&mut buf).await;
             if let Ok((_, addr)) = res {
                 let sid = u64::from_be_bytes(buf);
                 if sid == id {
                     println!("connected {}", addr);
                     let mtermo = termo.clone();
-                    thread::spawn(
-                        move|| {
+                    tokio::spawn(
+                        async move {
                             let udp = udp.clone();
                             let addr = addr.clone();
-                            Self::routine(mtermo, addr, udp);
+                            Self::routine(mtermo, addr, udp).await;
                         }
                     );
                 }
             }
-            thread::sleep(Duration::from_secs(3));
+            sleep(Duration::from_secs(3)).await;
             {
                 let mut t = termo.lock().unwrap();
                 t.temp = rand::thread_rng().gen_range(-10.0..35.0);
@@ -69,10 +70,9 @@ impl UdpTermo {
         }
     }
 
-    fn run(self, udp : UdpSocket) {
+    async fn run(self, udp : UdpSocket) {
         let me = Arc::new(Mutex::new(self));
         let audp = Arc::new(udp);
-        audp.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
-        Self::connected_routine(me, audp);
+        Self::connected_routine(me, audp).await;
     }
 }
